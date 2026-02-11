@@ -278,3 +278,8 @@ QBUILD provides a structured, automated build system for QuickBASIC 4.5 projects
 * Maintains compatibility with DOS-era constraints
 
 It bridges the gap between the interactive QB IDE and command-line toolchain automation while preserving period-correct behavior.
+
+## Building qbuild
+
+qbuild was built with Turbo c++ 3.0 on DOS 6.22.
+You may use build.bat if tc.exe exists. 
