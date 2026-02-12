@@ -5,10 +5,10 @@
 #include <io.h>
 #include <sys\stat.h>
 
-#define MAX_FILES 32
-#define MAX_LINE  256
-#define MAX_PATH  128
-#define DOS_CMD_LIMIT 127
+#define QBUILD_VERSION "1.1.0"
+#define MAX_FILES 64
+#define MAX_LINE 256
+#define MAX_PATH 260
 
 char tasm_path[MAX_PATH];
 char qb45_path[MAX_PATH];
@@ -23,19 +23,20 @@ FILE *logfp;
 
 /* -------------------------------------------------- */
 
-void fail(char *msg)
+void fail(const char *msg)
 {
     printf("\nERROR: %s\n", msg);
-    if (logfp) fprintf(logfp, "ERROR: %s\n", msg);
+    if (logfp)
+        fprintf(logfp, "ERROR: %s\n", msg);
     exit(1);
 }
 
-int file_exists(char *p)
+int file_exists(const char *p)
 {
     return access(p, 0) == 0;
 }
 
-void ensure_dir(char *path)
+void ensure_dir(const char *path)
 {
     mkdir(path);
 }
@@ -43,6 +44,7 @@ void ensure_dir(char *path)
 void clean_build(void)
 {
     printf("Cleaning build directory...\n");
+
     system("if exist build del build\\*.* > nul");
     system("if exist build\\obj del build\\obj\\*.* > nul");
     system("if exist build\\obj\\asm del build\\obj\\asm\\*.* > nul");
@@ -51,40 +53,12 @@ void clean_build(void)
     system("if exist build\\lib del build\\lib\\*.* > nul");
 }
 
-void check_cmd_length(char *exe, char *args)
-{
-    int total = strlen(exe) + 1 + strlen(args);
-
-    if (total >= DOS_CMD_LIMIT)
-    {
-        printf("\nERROR: Command line too long (%d chars).\n", total);
-        printf("DOS limit is %d characters.\n", DOS_CMD_LIMIT);
-        printf("Command was:\n%s %s\n\n", exe, args);
-
-        if (logfp)
-        {
-            fprintf(logfp, "ERROR: Command too long (%d chars)\n", total);
-            fprintf(logfp, "%s %s\n", exe, args);
-        }
-
-        exit(1);
-    }
-}
-
-void join_path(char *out, char *a, char *b)
+void join_path(char *out, const char *a, const char *b)
 {
     strcpy(out, a);
-    if (out[strlen(out)-1] != '\\')
+    if (out[strlen(out) - 1] != '\\')
         strcat(out, "\\");
     strcat(out, b);
-}
-
-void strip_ext(char *out, char *in)
-{
-    char *dot;
-    strcpy(out, in);
-    dot = strrchr(out, '.');
-    if (dot) *dot = 0;
 }
 
 void trim(char *s)
@@ -92,7 +66,7 @@ void trim(char *s)
     char *p;
 
     while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')
-        memmove(s, s+1, strlen(s));
+        memmove(s, s + 1, strlen(s));
 
     p = s + strlen(s) - 1;
 
@@ -100,41 +74,29 @@ void trim(char *s)
         *p-- = 0;
 }
 
-void log_command(char *exe, char *arg)
+void strip_ext(char *out, const char *in)
 {
-    printf("\nCOMMAND:\n%s %s\n\n", exe, arg);
-
-    if (logfp)
-    {
-        fprintf(logfp, "\nCOMMAND:\n%s %s\n\n", exe, arg);
-        fflush(logfp);
-    }
+    char *dot;
+    strcpy(out, in);
+    dot = strrchr(out, '.');
+    if (dot)
+        *dot = 0;
 }
 
-void write_rsp(char *path, char *content)
+void filename_only(char *out, const char *in)
 {
-    FILE *fp = fopen(path, "w");
-    if (!fp) fail("Cannot write response file.");
-
-    fprintf(fp, "%s", content);
-    fclose(fp);
-
-    if (logfp)
-    {
-        fprintf(logfp, "\nRESPONSE FILE: %s\n", path);
-        fprintf(logfp, "--------------------------\n");
-        fprintf(logfp, "%s", content);
-        fprintf(logfp, "--------------------------\n\n");
-        fflush(logfp);
-    }
+    const char *p = strrchr(in, '\\');
+    if (p)
+        strcpy(out, p + 1);
+    else
+        strcpy(out, in);
 }
 
-void run_tool(char *exe, char *arg)
+void run_tool(const char *exe, const char *arg)
 {
     char fullcmd[512];
 
     sprintf(fullcmd, "%s %s >> build\\build.log", exe, arg);
-
     printf("EXEC: %s\n", fullcmd);
 
     if (system(fullcmd) != 0)
@@ -143,17 +105,24 @@ void run_tool(char *exe, char *arg)
 
 /* -------------------------------------------------- */
 
-void find_build_file(char *out)
+int qb_severe_errors(const char *lstfile)
 {
-    struct ffblk f;
+    FILE *fp;
+    char line[256];
+    int errors = 0;
 
-    if (findfirst("*.bld", &f, 0) != 0)
-        fail("No .bld file found.");
+    fp = fopen(lstfile, "r");
+    if (!fp)
+        return -1;
 
-    strcpy(out, f.ff_name);
+    while (fgets(line, sizeof(line), fp))
+    {
+        if (strstr(line, "Severe") && strstr(line, "Error"))
+            errors = atoi(line);
+    }
 
-    if (findnext(&f) == 0)
-        fail("Multiple .bld files found.");
+    fclose(fp);
+    return errors;
 }
 
 /* -------------------------------------------------- */
@@ -206,13 +175,6 @@ int main(void)
     char obj[MAX_PATH];
     char lst[MAX_PATH];
 
-    char objlist[512] = "";
-    char exe_name[MAX_PATH];
-    char map_name[MAX_PATH];
-    char cmdline[256];
-
-    printf("QBUILD starting...\n");
-
     clean_build();
 
     ensure_dir("build");
@@ -224,32 +186,53 @@ int main(void)
 
     logfp = fopen("build\\build.log", "w");
 
-    find_build_file(bld_file);
+    /* Find .bld */
+    {
+        struct ffblk f;
+        if (findfirst("*.bld", &f, 0) != 0)
+            fail("No .bld file found.");
+        strcpy(bld_file, f.ff_name);
+    }
+
     parse_ini();
 
     /* Parse .bld */
-
     {
         FILE *fp;
         char line[MAX_LINE];
         int section = 0;
 
         fp = fopen(bld_file, "r");
+        if (!fp)
+            fail("Cannot open .bld file.");
 
         while (fgets(line, MAX_LINE, fp))
         {
             trim(line);
-            if (strlen(line) == 0) continue;
+            if (!strlen(line))
+                continue;
 
-            if (strcmp(line, "[name]") == 0) { section = 1; continue; }
-            if (strcmp(line, "[qb]") == 0)   { section = 2; continue; }
-            if (strcmp(line, "[asm]") == 0)  { section = 3; continue; }
+            if (!strcmp(line, "[name]"))
+            {
+                section = 1;
+                continue;
+            }
+            if (!strcmp(line, "[qb]"))
+            {
+                section = 2;
+                continue;
+            }
+            if (!strcmp(line, "[asm]"))
+            {
+                section = 3;
+                continue;
+            }
 
             if (section == 1)
                 strcpy(proj_name, line);
-            else if (section == 2)
+            if (section == 2)
                 strcpy(qb_files[qb_count++], line);
-            else if (section == 3)
+            if (section == 3)
                 strcpy(asm_files[asm_count++], line);
         }
 
@@ -257,118 +240,174 @@ int main(void)
     }
 
     /* ----- Assemble ----- */
-
     for (i = 0; i < asm_count; i++)
     {
-        char rsp[512];
+        FILE *rsp;
 
-        strip_ext(base, asm_files[i]);
+        filename_only(base, asm_files[i]);
+        strip_ext(base, base);
 
         sprintf(obj, "build\\obj\\asm\\%s.obj", base);
         sprintf(lst, "build\\obj\\asm\\%s.lst", base);
 
-        sprintf(cmdline, "/l %s,%s,%s", asm_files[i], obj, lst);
-        log_command(tasm_exe, cmdline);
+        if (file_exists(obj))
+            remove(obj);
+        if (file_exists(lst))
+            remove(lst);
 
-        sprintf(rsp, "%s\n", cmdline);
-        write_rsp("build\\step.rsp", rsp);
+        rsp = fopen("build\\step.rsp", "w");
+        fprintf(rsp, "/l %s,%s,%s\n", asm_files[i], obj, lst);
+        fclose(rsp);
 
         run_tool(tasm_exe, "@build\\step.rsp");
 
         if (!file_exists(obj))
             fail("ASM object file not created.");
-
-        strcat(objlist, obj);
-        if (i < asm_count-1 || qb_count > 0)
-            strcat(objlist, " ");
-    }
-
-    /* ----- Compile BASIC ----- */
-
-    for (i = 0; i < qb_count; i++)
-    {
-        strip_ext(base, qb_files[i]);
-
-        sprintf(obj, "build\\obj\\qb\\%s.obj", base);
-        sprintf(lst, "build\\obj\\qb\\%s.lst", base);
-
-        sprintf(cmdline, "/o %s %s %s",
-                qb_files[i],
-                obj,
-                lst);
-
-        check_cmd_length(bc_exe, cmdline);
-        log_command(bc_exe, cmdline);
-
-        run_tool(bc_exe, cmdline);
-
-        if (!file_exists(obj))
-            fail("BASIC object file not created.");
-
-        strcat(objlist, obj);
-        if (i < qb_count-1)
-            strcat(objlist, " ");
     }
 
     /* ----- Build QLB ----- */
-
     if (asm_count > 0)
     {
-        char rsp[2048];
-        char asmlist[1024] = "";
+        FILE *rsp;
 
+        rsp = fopen("build\\step.rsp", "w");
+        if (!rsp)
+            fail("Cannot create QLB rsp.");
+
+        /* /Q flag must appear BEFORE object list */
+        fprintf(rsp, "/Q ");
+
+        /* All ASM objects using LINK response continuation */
         for (i = 0; i < asm_count; i++)
         {
-            strip_ext(base, asm_files[i]);
-            sprintf(obj, "build\\obj\\asm\\%s.obj", base);
+            filename_only(base, asm_files[i]);
+            strip_ext(base, base);
 
-            strcat(asmlist, obj);
-            if (i < asm_count-1)
-                strcat(asmlist, " ");
+            if (i < asm_count - 1)
+                fprintf(rsp, "build\\obj\\asm\\%s.obj+\n", base);
+            else
+                fprintf(rsp, "build\\obj\\asm\\%s.obj", base);
         }
 
-        sprintf(cmdline, "/Q %s, build\\lib\\asm.qlb,build\\lib\\asm.map,%s",
-                asmlist, bqlb_lib);
-        log_command(link_exe, cmdline);
+        /* End object list */
+        fprintf(rsp, ",\n");
 
-        sprintf(rsp, "/Q %s,\nbuild\\lib\\asm.qlb,\nbuild\\lib\\asm.map,\n%s\n",
-                asmlist, bqlb_lib);
+        /* Output QLB */
+        fprintf(rsp, "build\\lib\\asm.qlb,\n");
+        fprintf(rsp, "build\\lib\\asm.map,\n");
+        fprintf(rsp, "%s\n", bqlb_lib);
 
-        write_rsp("build\\step.rsp", rsp);
+        fclose(rsp);
+
         run_tool(link_exe, "@build\\step.rsp");
 
         if (!file_exists("build\\lib\\asm.qlb"))
             fail("QLB file not created.");
     }
 
-    /* ----- Link EXE ----- */
-
+    /* ----- Compile BASIC ----- */
+    for (i = 0; i < qb_count; i++)
     {
-        char rsp[2048];
+        char cmd[512];
+        int severe;
+
+        filename_only(base, qb_files[i]);
+        strip_ext(base, base);
+
+        sprintf(obj, "build\\obj\\qb\\%s.obj", base);
+        sprintf(lst, "build\\obj\\qb\\%s.lst", base);
+
+        if (file_exists(obj))
+            remove(obj);
+        if (file_exists(lst))
+            remove(lst);
+
+        sprintf(cmd, "/o %s %s %s", qb_files[i], obj, lst);
+
+        run_tool(bc_exe, cmd);
+
+        if (!file_exists(lst))
+            fail("QB listing file not created.");
+
+        severe = qb_severe_errors(lst);
+
+        if (severe < 0)
+            fail("Could not read QB listing.");
+
+        if (severe > 0)
+            fail("QB compile failed.");
+
+        if (!file_exists(obj))
+            fail("QB object file not created.");
+    }
+
+    /* ----- Link EXE ----- */
+    {
+        FILE *rsp;
+        char exe_name[MAX_PATH];
+        char map_name[MAX_PATH];
 
         sprintf(exe_name, "build\\bin\\%s.exe", proj_name);
         sprintf(map_name, "build\\bin\\%s.map", proj_name);
 
-        sprintf(cmdline, "%s,%s,%s,%s",
-                objlist, exe_name, map_name, bcom_lib);
-        log_command(link_exe, cmdline);
+        rsp = fopen("build\\step.rsp", "w");
+        if (!rsp)
+            fail("Cannot create LINK rsp file.");
 
-        sprintf(rsp, "%s,\n%s,\n%s,\n%s\n",
-                objlist, exe_name, map_name, bcom_lib);
+        /* Write object list using LINK response continuation */
+        for (i = 0; i < asm_count; i++)
+        {
+            filename_only(base, asm_files[i]);
+            strip_ext(base, base);
 
-        write_rsp("build\\step.rsp", rsp);
+            /* If there are more objects after this one, use +\n continuation */
+            if (i < asm_count - 1 || qb_count > 0)
+                fprintf(rsp, "build\\obj\\asm\\%s.obj+\n", base);
+            else
+                fprintf(rsp, "build\\obj\\asm\\%s.obj", base);
+        }
+
+        for (i = 0; i < qb_count; i++)
+        {
+            filename_only(base, qb_files[i]);
+            strip_ext(base, base);
+
+            if (i < qb_count - 1)
+                fprintf(rsp, "build\\obj\\qb\\%s.obj+\n", base);
+            else
+                fprintf(rsp, "build\\obj\\qb\\%s.obj", base);
+        }
+
+        for (i = 0; i < qb_count; i++)
+        {
+            filename_only(base, qb_files[i]);
+            strip_ext(base, base);
+            fprintf(rsp, "build\\obj\\qb\\%s.obj ", base);
+        }
+
+        /* End object list */
+        fprintf(rsp, ",\n");
+
+        /* Now next prompts */
+        fprintf(rsp, "%s,\n", exe_name);
+        fprintf(rsp, "%s,\n", map_name);
+        fprintf(rsp, "%s\n", bcom_lib);
+
+        fclose(rsp);
+
         run_tool(link_exe, "@build\\step.rsp");
 
         if (!file_exists(exe_name))
             fail("EXE file not created.");
     }
 
-    /* ----- Generate project.mak ----- */
-
+    /* ----- Generate project.mak (used by launch.bat) ----- */
     {
         FILE *mak = fopen("build\\project.mak", "w");
-        if (!mak) fail("Cannot create project.mak");
+        if (!mak)
+            fail("Cannot create project.mak");
 
+        /* .bld contains correct relative paths for [qb] files */
         for (i = 0; i < qb_count; i++)
             fprintf(mak, "..\\%s\n", qb_files[i]);
 
@@ -378,21 +417,26 @@ int main(void)
             fail("project.mak not created.");
     }
 
-    /* ----- Generate launch.bat (FULL PATH QB) ----- */
-
+    /* ----- Generate launch.bat ----- */
     {
         FILE *bat = fopen("launch.bat", "w");
-        if (!bat) fail("Cannot create launch.bat");
+        if (!bat)
+            fail("Cannot create launch.bat");
 
         fprintf(bat, "@echo off\n");
-        fprintf(bat, "\"%s\\qb\" /l build\\lib\\asm.qlb build\\project.mak\n", qb45_path);
+
+        if (file_exists("build\\lib\\asm.qlb"))
+            fprintf(bat, "\"%s\\qb\" /l build\\lib\\asm.qlb build\\project.mak\n", qb45_path);
+        else
+            fprintf(bat, "\"%s\\qb\" build\\project.mak\n", qb45_path);
 
         fclose(bat);
     }
 
     printf("\nBuild complete.\n");
 
-    if (logfp) fclose(logfp);
+    if (logfp)
+        fclose(logfp);
 
     return 0;
 }
