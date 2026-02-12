@@ -43,14 +43,52 @@ void ensure_dir(const char *path)
 
 void clean_build(void)
 {
+    struct ffblk f;
+    char path[MAX_PATH];
+    char search[MAX_PATH];
+    const char *dirs[4];
+    int d;
+
     printf("Cleaning build directory...\n");
 
-    system("if exist build del build\\*.* > nul");
-    system("if exist build\\obj del build\\obj\\*.* > nul");
-    system("if exist build\\obj\\asm del build\\obj\\asm\\*.* > nul");
-    system("if exist build\\obj\\qb del build\\obj\\qb\\*.* > nul");
-    system("if exist build\\bin del build\\bin\\*.* > nul");
-    system("if exist build\\lib del build\\lib\\*.* > nul");
+    /* Attribute 0x10 is directory */
+    #define ATTR_DIRECTORY 0x10
+
+    /* Remove files from build root */
+    if (findfirst("build\\*.*", &f, 0) == 0)
+    {
+        do {
+            if (!(f.ff_attrib & ATTR_DIRECTORY))
+            {
+                sprintf(path, "build\\%s", f.ff_name);
+                remove(path);
+            }
+        } while (findnext(&f) == 0);
+    }
+
+    /* Subdirectories */
+    dirs[0] = "build\\obj\\asm";
+    dirs[1] = "build\\obj\\qb";
+    dirs[2] = "build\\bin";
+    dirs[3] = "build\\lib";
+
+    for (d = 0; d < 4; d++)
+    {
+        sprintf(search, "%s\\*.*", dirs[d]);
+
+        if (findfirst(search, &f, 0) == 0)
+        {
+            do {
+                if (!(f.ff_attrib & ATTR_DIRECTORY))
+                {
+                    sprintf(path, "%s\\%s", dirs[d], f.ff_name);
+                    remove(path);
+                }
+            } while (findnext(&f) == 0);
+        }
+    }
+
+    #undef ATTR_DIRECTORY
 }
 
 void join_path(char *out, const char *a, const char *b)
@@ -284,7 +322,7 @@ int main(void)
             strip_ext(base, base);
 
             if (i < asm_count - 1)
-                fprintf(rsp, "build\\obj\\asm\\%s.obj+\n", base);
+                fprintf(rsp, "build\\obj\\asm\\%s.obj+ \n", base);
             else
                 fprintf(rsp, "build\\obj\\asm\\%s.obj", base);
         }
@@ -362,7 +400,7 @@ int main(void)
 
             /* If there are more objects after this one, use +\n continuation */
             if (i < asm_count - 1 || qb_count > 0)
-                fprintf(rsp, "build\\obj\\asm\\%s.obj+\n", base);
+                fprintf(rsp, "build\\obj\\asm\\%s.obj+ \n", base);
             else
                 fprintf(rsp, "build\\obj\\asm\\%s.obj", base);
         }
@@ -373,16 +411,9 @@ int main(void)
             strip_ext(base, base);
 
             if (i < qb_count - 1)
-                fprintf(rsp, "build\\obj\\qb\\%s.obj+\n", base);
+                fprintf(rsp, "build\\obj\\qb\\%s.obj+ \n", base);
             else
                 fprintf(rsp, "build\\obj\\qb\\%s.obj", base);
-        }
-
-        for (i = 0; i < qb_count; i++)
-        {
-            filename_only(base, qb_files[i]);
-            strip_ext(base, base);
-            fprintf(rsp, "build\\obj\\qb\\%s.obj ", base);
         }
 
         /* End object list */
